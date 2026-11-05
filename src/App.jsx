@@ -36,12 +36,12 @@ export default function App() {
 
   const openReport = (r, from) => go('report', { report: r, reportFrom: from });
 
-  const finishSet = async (repLog, secs, clipBlob) => {
+  const finishSet = async (repLog, secs, clipBlob, mode) => {
     const ex = items[ui.exIdx] || items[0];
     const id = 'r' + Date.now();
     let hasClip = false;
     if (clipBlob) { await putClip(id, clipBlob); hasClip = true; }
-    const rec = { id, title: ex[0], date: todayLabel(), duration: fmtTime(secs), reps: repLog, source: 'live', hasClip, ts: Date.now() };
+    const rec = { id, title: ex[0], date: todayLabel(), duration: fmtTime(secs), reps: repLog, source: mode === 'demo' ? 'demo' : 'live', hasClip, ts: Date.now() };
     if (repLog.length) set((s) => ({ recs: [rec, ...s.recs] }));
     openReport(rec, 'live');
   };
@@ -236,7 +236,7 @@ function Live({ T, p, ex, onExit, onFinish }) {
   const finish = async () => {
     if (busy) return; setBusy(true);
     const clip = cam === 'real' && camRef.current ? await camRef.current.stop() : null;
-    onFinish(repLog, secs, clip);
+    onFinish(repLog, secs, clip, cam);
   };
 
   const reps = repLog.length, bad = repLog.filter((r) => r.bad).length;
@@ -313,7 +313,7 @@ function Report({ T, r, pro, p, set, backLabel, onBack, onDelete }) {
         <div className="card"><b>No reps counted.</b><p className="muted">Stand side-on, about 2 m from the phone, with your whole body in frame. The counter needs the elbow to bend under 70° and straighten past 140°.</p></div>
       ) : (<>
         <div className="clip">
-          {clipUrl ? <video src={clipUrl} controls playsInline /> : <div className="clip-ph"><span>{r.source === 'video' ? 'analysed video' : 'sample session · no clip'}</span><span className="mono">{r.duration}</span></div>}
+          {clipUrl ? <video src={clipUrl} controls playsInline /> : <div className="clip-ph"><span>{r.source === 'video' ? 'analysed video' : r.source === 'demo' ? 'demo session · no clip' : r.sample ? 'sample session · no clip' : 'no clip saved'}</span><span className="mono">{r.duration}</span></div>}
           <div className="markers">{b.bad.map((x) => <i key={x.n} style={{ left: ((x.n - 0.5) / b.total) * 100 + '%' }} />)}</div>
         </div>
         <div className="blocks">{r.reps.slice(0, 20).map((x) => <span key={x.n} className={x.bad ? 'bad' : ''}>{x.n}</span>)}</div>
@@ -328,7 +328,7 @@ function Report({ T, r, pro, p, set, backLabel, onBack, onDelete }) {
             <div className="limit" style={{ bottom: (TORSO_LIMIT / 14) * 100 + '%' }} />
             {r.reps.map((x) => <i key={x.n} style={{ height: Math.round((Math.min(x.torso, 14) / 14) * 100) + '%', background: x.torso > TORSO_LIMIT ? T.bad : T.muted }} />)}
           </div>
-          <div className="mono muted small">{r.source === 'video' ? 'OFFLINE · RECORDED VIDEO' : r.sample ? 'SAMPLE DATA' : 'LIVE · PHONE CAMERA'} · 33 LANDMARKS · SVBM</div>
+          <div className="mono muted small">{r.source === 'video' ? 'OFFLINE · RECORDED VIDEO' : r.sample ? 'SAMPLE DATA' : r.source === 'demo' ? 'DEMO · SIMULATED' : 'LIVE · PHONE CAMERA'} · 33 LANDMARKS · SVBM</div>
         </div>
         <div className="risk" style={{ background: b.riskBg, borderColor: b.riskColor }}>
           <b style={{ color: b.riskColor }}>{b.riskTitle}</b><p>{b.riskBody}</p>
