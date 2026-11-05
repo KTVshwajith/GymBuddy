@@ -1,0 +1,6 @@
+{
+  "appId": "nz.gymbuddy.app",
+  "appName": "GymBuddy",
+  "webDir": "dist",
+  "android": { "allowMixedContent": false }
+}
