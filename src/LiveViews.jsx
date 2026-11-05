@@ -1,6 +1,6 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { ang3, incl, TORSO_LIMIT, DRIFT_LIMIT } from './data.js';
-import { createLandmarker, measure, RepCounter, drawSkeleton } from './pose.js';
+import { createLandmarker, measure, RepCounter, drawSkeleton, Smoother, OK, BAD } from './pose.js';
 
 /* ---------- Demo: simulated skeleton, every third rep goes wrong ---------- */
 function geo(t, bad) {
@@ -13,7 +13,8 @@ function geo(t, bad) {
   return { rep, drift, S, H, K, A, Hd, F, E, W, Ey, ang: ang3(S, E, W), torso: incl(H, S), neck: incl(S, Ey), ideal: { x: S.x + 5, y: S.y + 66 } };
 }
 
-export function DemoSkeleton({ paused, dataMode, colors, onRep }) {
+export function DemoSkeleton({ paused, dataMode, onRep, onFrame }) {
+  const colors = { good: OK, bad: BAD };
   const [t, setT] = useState(0);
   const pr = useRef({ paused, onRep }); pr.current = { paused, onRep };
   const s = useRef({ t: 0, last: null, rep: 0, min: 180, max: 0, bad: false, tor: 0 });
@@ -38,19 +39,22 @@ export function DemoSkeleton({ paused, dataMode, colors, onRep }) {
     return () => cancelAnimationFrame(id);
   }, []);
   const g = geo(t, true), warn = g.drift > DRIFT_LIMIT, wT = g.torso > TORSO_LIMIT;
-  const arm = warn ? colors.bad : colors.good, tc = wT ? colors.bad : colors.good, body = 'rgba(245,243,239,.55)';
-  const ln = (a, b, col, w = 4) => <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={col} strokeWidth={w} strokeLinecap="round" />;
-  const dot = (a, col, r = 5.5) => <circle cx={a.x} cy={a.y} r={r} fill="#111" stroke={col} strokeWidth={2.5} />;
+  const arm = warn ? colors.bad : colors.good, tc = wT ? colors.bad : colors.good, body = 'rgba(255,255,255,.85)';
+  const fr = useRef(onFrame); fr.current = onFrame;
+  const nowBad = warn || wT;
+  useEffect(() => { fr.current && fr.current({ coverage: 'FULL', bad: nowBad }); }, [nowBad]);
+  const ln = (a, b, col, w = 6) => <g><line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="rgba(0,0,0,.65)" strokeWidth={w + 4} strokeLinecap="round" /><line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={col} strokeWidth={w} strokeLinecap="round" /></g>;
+  const dot = (a, col, r = 7) => <circle cx={a.x} cy={a.y} r={r} fill="#111" stroke={col} strokeWidth={3.5} />;
   const txt = (x, y, s, col = '#f5f3ef') => <text x={x} y={y} fill={col} fontSize={11} fontFamily="JetBrains Mono, monospace">{s}</text>;
   return (
     <svg viewBox="0 0 320 480" preserveAspectRatio="xMidYMid meet" className="fill">
       <line x1={g.H.x} y1={g.H.y} x2={g.H.x} y2={g.S.y - 70} stroke="rgba(255,255,255,.25)" strokeWidth={1.2} strokeDasharray="4 4" />
       {warn && <circle cx={g.ideal.x} cy={g.ideal.y} r={11} fill="none" stroke={colors.good} strokeWidth={1.5} strokeDasharray="3 3" />}
       <circle cx={g.Hd.x} cy={g.Hd.y} r={21} fill="none" stroke={body} strokeWidth={3} />
-      {ln({ x: g.Hd.x, y: g.Hd.y + 21 }, g.S, body)}{ln(g.S, g.Ey, body, 2)}{ln(g.S, g.H, tc)}{ln(g.H, g.K, body)}{ln(g.K, g.A, body)}{ln(g.A, g.F, body)}
-      {ln(g.S, g.E, arm, 5)}{ln(g.E, g.W, arm, 5)}
+      {ln({ x: g.Hd.x, y: g.Hd.y + 21 }, g.S, body)}{ln(g.S, g.Ey, body, 2)}{ln(g.S, g.H, tc, 8)}{ln(g.H, g.K, body)}{ln(g.K, g.A, body)}{ln(g.A, g.F, body)}
+      {ln(g.S, g.E, arm, 9)}{ln(g.E, g.W, arm, 9)}
       <rect x={g.W.x - 5} y={g.W.y - 14} width={10} height={28} rx={3} fill="#6f6c66" />
-      {dot(g.S, tc)}{dot(g.H, tc)}{dot(g.K, colors.good)}{dot(g.A, colors.good)}{dot(g.F, colors.good)}{dot(g.W, arm)}{dot(g.E, arm, 7)}
+      {dot(g.S, tc)}{dot(g.H, tc)}{dot(g.K, colors.good)}{dot(g.A, colors.good)}{dot(g.F, colors.good)}{dot(g.W, arm, 9)}{dot(g.E, arm, 10)}
       {dataMode && txt(g.E.x - 56, g.E.y + 4, Math.round(g.ang) + '°')}
       {dataMode && txt(g.H.x + 12, g.H.y - 40, 'torso ' + Math.round(g.torso) + '°', wT ? colors.bad : '#b5b2ac')}
       {dataMode && txt(g.Ey.x + 18, g.Ey.y + 30, 'neck ' + Math.round(g.neck) + '°', '#b5b2ac')}
@@ -59,9 +63,9 @@ export function DemoSkeleton({ paused, dataMode, colors, onRep }) {
 }
 
 /* ---------- Real camera: MediaPipe + SVBM + recording ---------- */
-export const LiveCamera = forwardRef(function LiveCamera({ paused, dataMode, colors, onRep, facing }, ref) {
+export const LiveCamera = forwardRef(function LiveCamera({ paused, dataMode, onRep, onFrame, facing, view }, ref) {
   const vref = useRef(), cref = useRef();
-  const pr = useRef(); pr.current = { paused, dataMode, colors, onRep };
+  const pr = useRef(); pr.current = { paused, dataMode, onRep, onFrame, view };
   const rec = useRef({ recorder: null, chunks: [] });
   const [status, setStatus] = useState('Loading pose model…');
 
@@ -84,6 +88,9 @@ export const LiveCamera = forwardRef(function LiveCamera({ paused, dataMode, col
   useEffect(() => {
     let stop = false, stream, lm, raf, lastT = -1, seen = false;
     const counter = new RepCounter((d) => pr.current.onRep(d));
+    const smooth = new Smoother();
+    let lastKey = '';
+    const report = (coverage, bad) => { const k = coverage + bad; if (k !== lastKey) { lastKey = k; pr.current.onFrame && pr.current.onFrame({ coverage, bad }); } };
     const mirror = facing === 'user';
     (async () => {
       try {
@@ -95,7 +102,7 @@ export const LiveCamera = forwardRef(function LiveCamera({ paused, dataMode, col
         const vid = vref.current;
         vid.srcObject = stream;
         await vid.play();
-        setStatus('Step into frame — side-on, full body');
+        setStatus('Step into frame — side-on, so your working arm is visible');
         const cv = cref.current;
         cv.width = vid.videoWidth; cv.height = vid.videoHeight;
         // record the composited canvas (camera + skeleton)
@@ -122,10 +129,11 @@ export const LiveCamera = forwardRef(function LiveCamera({ paused, dataMode, col
             const L = res.landmarks && res.landmarks[0];
             if (L) {
               if (!seen) { seen = true; setStatus(''); }
-              const m = measure(L, W, H, mirror);
+              const m = measure(smooth.push(L), W, H, mirror, pr.current.view);
               if (!pr.current.paused) counter.push(m);
-              drawSkeleton(ctx, m, W, H, pr.current.colors, pr.current.dataMode);
-            } else if (seen) setStatus('Step back into frame');
+              drawSkeleton(ctx, m, W, H, pr.current.dataMode);
+              report(m.coverage, m.torsoBad || m.driftBad);
+            } else { smooth.reset(); report('NONE', false); }
           }
           raf = requestAnimationFrame(loop);
         };
@@ -146,7 +154,7 @@ export const LiveCamera = forwardRef(function LiveCamera({ paused, dataMode, col
   return (
     <div className="fill" style={{ background: '#000' }}>
       <video ref={vref} playsInline muted style={{ position: 'absolute', width: 2, height: 2, opacity: 0, pointerEvents: 'none' }} />
-      <canvas ref={cref} className="fill" style={{ objectFit: 'cover' }} />
+      <canvas ref={cref} className="fill" style={{ objectFit: 'contain' }} />
       {status && <div className="cam-status">{status}</div>}
     </div>
   );

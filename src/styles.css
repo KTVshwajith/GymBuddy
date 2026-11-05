@@ -149,3 +149,22 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .form-pill b { font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 26px; line-height: 1; text-transform: uppercase; }
 .live-btn { min-width: 76px; text-align: center; border-radius: 8px; background: rgba(255,255,255,.16); font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 20px; letter-spacing: .04em; }
 .live-btn.stop { background: #f5f3ef; color: #0a0a0a; }
+
+/* ---- live alerts: visible from 2 m away ---- */
+.live::after { content: ''; position: absolute; inset: 0; pointer-events: none; border: 0 solid transparent; transition: border-width .15s, border-color .15s, box-shadow .15s; z-index: 3; }
+.live.edge-good::after { border-width: 14px; border-color: #2BFF6A; box-shadow: inset 0 0 60px rgba(43,255,106,.55); }
+.live.edge-bad::after { border-width: 16px; border-color: #FF2D2D; box-shadow: inset 0 0 80px rgba(255,45,45,.65); animation: edgePulse .5s ease-in-out infinite alternate; }
+@keyframes edgePulse { from { box-shadow: inset 0 0 40px rgba(255,45,45,.4); } to { box-shadow: inset 0 0 110px rgba(255,45,45,.8); } }
+.rep-flash { position: absolute; left: 50%; top: 36%; transform: translate(-50%, -50%); z-index: 4; pointer-events: none;
+  font-family: 'Barlow Condensed', sans-serif; font-weight: 800; font-size: 54px; letter-spacing: .02em; padding: 8px 26px; border-radius: 12px; white-space: nowrap;
+  animation: pop .25s ease-out; }
+.rep-flash.good { background: #2BFF6A; color: #0a0a0a; }
+.rep-flash.bad { background: #FF2D2D; color: #fff; }
+@keyframes pop { from { transform: translate(-50%, -50%) scale(.6); opacity: 0; } to { transform: translate(-50%, -50%) scale(1); opacity: 1; } }
+.coverage { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 112px); left: 14px; font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 600; letter-spacing: .04em; padding: 6px 10px; border-radius: 6px; background: rgba(0,0,0,.6); z-index: 2; }
+.coverage.warn { background: #FFC233; color: #0a0a0a; }
+.live-note { top: calc(env(safe-area-inset-top, 0px) + 148px); }
+.live-modes { flex-wrap: wrap; right: 14px; z-index: 2; }
+.live-top, .live-bottom { z-index: 2; }
+.form-pill b { font-size: 30px; }
+.cue { font-size: 19px; text-shadow: 0 1px 3px rgba(0,0,0,.9); }

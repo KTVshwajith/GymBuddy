@@ -2,11 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { THEMES, GOALS, PLANS, EQUIPMENT, LEVELS, FEEDBACK, SEED, CLIENTS, TORSO_LIMIT, buildReport, fmtTime, todayLabel } from './data.js';
 import { loadState, saveState, clearState, putClip, getClip, deleteClip, clearClips } from './storage.js';
 import { DemoSkeleton, LiveCamera } from './LiveViews.jsx';
-import { analyzeVideoFile } from './pose.js';
+import { analyzeVideoFile, OK, BAD } from './pose.js';
 
-const DEFAULTS = { onboarded: false, role: 'self', goal: 'arms', place: 'home', equip: ['Dumbbells'], level: 'Intermediate', theme: 'volt', fb: 'Coach cues', recs: [], injury: [] };
+const DEFAULTS = { onboarded: false, role: 'self', goal: 'arms', place: 'home', equip: ['Dumbbells'], level: 'Intermediate', theme: 'volt', fb: 'Coach cues', view: 'Auto', recs: [], injury: [] };
 const GOOD_CUES = ['Good rep — full extension at the bottom', 'Smooth. Two seconds on the way down', 'Elbows quiet, nice control', 'Clean rep'];
-const START_CUE = 'Step into frame — side-on, full body visible';
+const START_CUE = 'Step into frame — side-on, working arm visible';
 const isPoseEx = (name) => /curl/i.test(name);
 
 export default function App() {
@@ -57,7 +57,7 @@ export default function App() {
   else if (screen === 'goal') body = <Goal p={p} set={set} onNext={() => go('setup')} />;
   else if (screen === 'setup') body = <Setup p={p} set={set} onBack={() => go('goal')} onNext={() => { set({ onboarded: true }); go('today'); }} />;
   else if (screen === 'today') body = <Today p={p} items={items} recs={p.recs} onStart={(i) => go('live', { exIdx: i })} />;
-  else if (screen === 'live') body = <Live T={T} p={p} ex={items[ui.exIdx] || items[0]} onExit={() => go(pro ? 'clients' : 'today')} onFinish={finishSet} />;
+  else if (screen === 'live') body = <Live p={p} set={set} ex={items[ui.exIdx] || items[0]} onExit={() => go(pro ? 'clients' : 'today')} onFinish={finishSet} />;
   else if (screen === 'report') {
     const from = ui.reportFrom, cl = CLIENTS.find((c) => c.id === ui.clientId);
     body = <Report T={T} r={ui.report || SEED[0]} pro={pro} p={p} set={set}
@@ -207,7 +207,17 @@ function Today({ p, items, recs, onStart }) {
 }
 
 /* ---------------------------------- live ---------------------------------- */
-function Live({ T, p, ex, onExit, onFinish }) {
+const VIEWS = ['Auto', 'Close-up', 'Full body'];
+const COVERAGE = {
+  NONE: ['No body detected — step into view', 'warn'],
+  NO_ARM: ['Show your working arm to the camera', 'warn'],
+  ARM: ['ARM ONLY · torso check off', 'info'],
+  UPPER: ['UPPER BODY · arm + torso checks', 'info'],
+  FULL: ['FULL BODY · all checks on', 'info'],
+  NEED_LEGS: ['Step back — full body not in view', 'warn'],
+};
+
+function Live({ p, set, ex, onExit, onFinish }) {
   const [cam, setCam] = useState('real');
   const [facing, setFacing] = useState('user');
   const [key, setKey] = useState(0);
@@ -217,55 +227,70 @@ function Live({ T, p, ex, onExit, onFinish }) {
   const [cue, setCue] = useState(START_CUE);
   const [lastBad, setLastBad] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [frame, setFrame] = useState({ coverage: 'NONE', bad: false });
+  const [flash, setFlash] = useState(null); // 'good' | 'bad' briefly after each rep
   const camRef = useRef();
+  const flashT = useRef();
   const target = parseInt((ex[1].match(/× (\d+)/) || [0, 12])[1], 10) || 12;
-  const colors = { good: T.good, bad: T.bad };
   const dataMode = p.fb === 'Data';
+  const view = p.view || 'Auto';
 
   useEffect(() => { const iv = setInterval(() => !paused && setSecs((s) => s + 1), 1000); return () => clearInterval(iv); }, [paused]);
-  useEffect(() => { if (repLog.length && 'vibrate' in navigator) try { navigator.vibrate(lastBad ? [60, 60, 60] : 40); } catch { /* ignore */ } }, [repLog.length]);
+  useEffect(() => { if (repLog.length && 'vibrate' in navigator) try { navigator.vibrate(lastBad ? [80, 60, 80, 60, 80] : 50); } catch { /* ignore */ } }, [repLog.length]);
+  useEffect(() => () => clearTimeout(flashT.current), []);
 
   const countRef = useRef(0);
   const onRep = (d) => {
     const n = ++countRef.current;
     setLastBad(d.bad);
-    setCue(d.bad ? (d.torso > TORSO_LIMIT ? `Torso swinging ${d.torso}° — brace and drop the weight` : 'Elbow drifting forward — pin it to your side') : GOOD_CUES[n % GOOD_CUES.length]);
+    setCue(d.bad
+      ? (d.torsoBad ? `Torso swinging ${d.torso}° — brace and drop the weight` : 'Elbow drifting forward — pin it to your side')
+      : GOOD_CUES[n % GOOD_CUES.length]);
     setRepLog((log) => [...log, { n, rom: Math.max(d.rom, 40), bad: d.bad, torso: d.torso }]);
+    setFlash(d.bad ? 'bad' : 'good');
+    clearTimeout(flashT.current);
+    flashT.current = setTimeout(() => setFlash(null), 1100);
   };
-  const restart = (patch) => { countRef.current = 0; setRepLog([]); setLastBad(false); setSecs(0); setCue(START_CUE); setKey((k) => k + 1); patch && patch(); };
+  const restart = (patch) => { countRef.current = 0; setRepLog([]); setLastBad(false); setSecs(0); setCue(START_CUE); setFlash(null); setFrame({ coverage: 'NONE', bad: false }); setKey((k) => k + 1); patch && patch(); };
   const finish = async () => {
     if (busy) return; setBusy(true);
     const clip = cam === 'real' && camRef.current ? await camRef.current.stop() : null;
     onFinish(repLog, secs, clip, cam);
   };
+  const cycleView = () => set({ view: VIEWS[(VIEWS.indexOf(view) + 1) % VIEWS.length] });
 
   const reps = repLog.length, bad = repLog.filter((r) => r.bad).length;
   const score = reps ? Math.round((100 * (reps - bad)) / reps) + '%' : '—';
   const formWord = !reps ? 'Get set' : lastBad ? 'Fix form' : 'Clean';
+  const [covText, covKind] = COVERAGE[frame.coverage] || COVERAGE.NONE;
+  const edge = frame.bad ? 'edge-bad' : flash === 'bad' ? 'edge-bad' : flash === 'good' ? 'edge-good' : '';
   return (
-    <div className="live">
+    <div className={'live ' + edge}>
       <div className="live-stage">
         {cam === 'real'
-          ? <LiveCamera key={'c' + key + facing} ref={camRef} paused={paused} dataMode={dataMode} colors={colors} onRep={onRep} facing={facing} />
-          : <DemoSkeleton key={'d' + key} paused={paused} dataMode={dataMode} colors={colors} onRep={onRep} />}
+          ? <LiveCamera key={'c' + key + facing} ref={camRef} paused={paused} dataMode={dataMode} onRep={onRep} onFrame={setFrame} facing={facing} view={view} />
+          : <DemoSkeleton key={'d' + key} paused={paused} dataMode={dataMode} onRep={onRep} onFrame={setFrame} />}
       </div>
       <div className="live-top">
         <button className="icon-btn" onClick={onExit} aria-label="Close">×</button>
         <div className="live-title"><div className="live-ex">{ex[0]}</div><div className="live-set">Set 1 of 3 · {ex[1]}</div></div>
-        <div className="rec"><i style={{ background: paused ? '#8b8882' : 'oklch(0.65 0.2 25)' }} />{fmtTime(secs)}</div>
+        <div className="rec"><i style={{ background: paused ? '#8b8882' : '#FF2D2D' }} />{fmtTime(secs)}</div>
       </div>
       <div className="live-modes">
         {[['real', 'My camera'], ['demo', 'Demo']].map(([k, l]) => (
           <button key={k} className={cam === k ? 'on' : ''} onClick={() => restart(() => setCam(k))}>{l}</button>
         ))}
         {cam === 'real' && <button onClick={() => restart(() => setFacing((f) => (f === 'user' ? 'environment' : 'user')))}>Flip ⟲</button>}
+        {cam === 'real' && <button onClick={cycleView}>View: {view}</button>}
       </div>
+      {cam === 'real' && <div className={'coverage ' + covKind}>{covText}</div>}
       {!isPoseEx(ex[0]) && <div className="live-note">Form rules are tuned for curls. Rep count may be off for this exercise.</div>}
+      {flash && <div className={'rep-flash ' + flash}>{flash === 'bad' ? '✕ FIX FORM' : '✓ CLEAN REP'}</div>}
       <div className="live-bottom">
         <div className="live-count"><span className="big">{reps}</span><span className="of">OF {target} REPS</span></div>
-        {p.fb !== 'Minimal' && <div className="cue" style={{ color: !reps ? '#c9c6bf' : lastBad ? T.bad : T.good === '#f5f3ef' ? '#f5f3ef' : T.good }}>{cue}</div>}
+        {p.fb !== 'Minimal' && <div className="cue" style={{ color: !reps ? '#e6e3dc' : lastBad ? BAD : OK }}>{cue}</div>}
         <div className="live-actions">
-          <div className="form-pill" style={{ background: !reps ? 'rgba(255,255,255,.12)' : lastBad ? T.bad : T.good, color: !reps ? '#f5f3ef' : lastBad ? T.onAccent : '#0a0a0a' }}>
+          <div className="form-pill" style={{ background: !reps ? 'rgba(255,255,255,.14)' : lastBad ? BAD : OK, color: !reps ? '#f5f3ef' : '#0a0a0a' }}>
             <small>FORM · {score} CLEAN</small><b>{formWord}</b>
           </div>
           <button className="live-btn" onClick={() => setPaused((v) => !v)}>{paused ? 'GO' : 'PAUSE'}</button>
@@ -443,6 +468,9 @@ function Me({ p, set, onRedo, onReset }) {
       <h3 className="h3">Live feedback</h3>
       <Seg options={FEEDBACK} value={p.fb} onChange={(fb) => set({ fb })} />
       <p className="muted small">{help}</p>
+      <h3 className="h3">Body detection</h3>
+      <Seg options={['Auto', 'Close-up', 'Full body']} value={p.view || 'Auto'} onChange={(view) => set({ view })} />
+      <p className="muted small">{(p.view || 'Auto') === 'Auto' ? 'Draws and checks only what the camera can see. Close to the camera: arm only. Further back: torso and legs too.' : p.view === 'Close-up' ? 'Tracks just your working arm. Good when you stand close to the phone. Torso check is off.' : 'Tracks your whole body and reminds you to step back if your legs are out of view.'}</p>
       <h3 className="h3">Account type</h3>
       <Seg options={['Training myself', 'Coach / physio / gym']} value={p.role === 'pro' ? 'Coach / physio / gym' : 'Training myself'} onChange={(v) => set({ role: v.startsWith('Coach') ? 'pro' : 'self' })} />
       <h3 className="h3">My plan</h3>
