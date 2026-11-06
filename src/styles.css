@@ -168,3 +168,20 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 .live-top, .live-bottom { z-index: 2; }
 .form-pill b { font-size: 30px; }
 .cue { font-size: 19px; text-shadow: 0 1px 3px rgba(0,0,0,.9); }
+
+/* ---- navigation: back + home on every step ---- */
+.topbar { position: sticky; top: 0; z-index: 4; display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  margin: calc(-1 * (env(safe-area-inset-top, 0px) + 20px)) -18px 6px; padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px 10px;
+  background: var(--bg); border-bottom: 1px solid var(--line); }
+.nav-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px 0 10px; border-radius: var(--pill);
+  background: var(--surf); border: 1.5px solid var(--line); font-weight: 600; font-size: 15px; }
+.nav-btn:active { background: var(--text); color: var(--bg); }
+.nav-ico { font-size: 26px; line-height: 1; margin-top: -3px; }
+.nav-ico.home { font-size: 20px; margin-top: -1px; }
+.switcher { display: flex; flex-direction: column; gap: 8px; background: var(--surf); border: 1px solid var(--line); border-radius: var(--r); padding: 12px; }
+.switch-head { display: flex; justify-content: space-between; align-items: center; }
+.h3.flat { margin: 0; }
+.text-btn { font-size: 14px; font-weight: 600; color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+.chip-scroll { display: flex; gap: 8px; overflow-x: auto; margin: 0 -12px; padding: 0 12px 2px; scrollbar-width: none; }
+.chip-scroll::-webkit-scrollbar { display: none; }
+.chip-scroll .chip { white-space: nowrap; flex: none; }

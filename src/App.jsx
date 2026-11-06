@@ -3,6 +3,10 @@ import { THEMES, GOALS, PLANS, EQUIPMENT, LEVELS, FEEDBACK, SEED, CLIENTS, TORSO
 import { loadState, saveState, clearState, putClip, getClip, deleteClip, clearClips } from './storage.js';
 import { DemoSkeleton, LiveCamera } from './LiveViews.jsx';
 import { analyzeVideoFile, OK, BAD } from './pose.js';
+import { Capacitor } from '@capacitor/core';
+import { App as CapApp } from '@capacitor/app';
+
+const NATIVE = Capacitor.isNativePlatform();
 
 const DEFAULTS = { onboarded: false, role: 'self', goal: 'arms', place: 'home', equip: ['Dumbbells'], level: 'Intermediate', theme: 'volt', fb: 'Coach cues', view: 'Auto', recs: [], injury: [] };
 const GOOD_CUES = ['Good rep — full extension at the bottom', 'Smooth. Two seconds on the way down', 'Elbows quiet, nice control', 'Clean rep'];
@@ -16,7 +20,35 @@ export default function App() {
 
   const [screen, setScreen] = useState(() => (p.onboarded ? (p.role === 'pro' ? 'clients' : 'today') : 'welcome'));
   const [ui, setUi] = useState({ exIdx: 0, report: null, reportFrom: 'live', clientId: null });
-  const go = (s, extra) => { if (extra) setUi((u) => ({ ...u, ...extra })); setScreen(s); window.scrollTo(0, 0); };
+  // Navigation: a back stack so every screen can go back, plus Home.
+  // opts.root = start a fresh stack (tabs, home); opts.replace = don't keep the current screen (e.g. leaving the camera)
+  const stack = useRef([]);
+  const homeScreen = !p.onboarded ? 'welcome' : p.role === 'pro' ? 'clients' : 'today';
+  const show = (s) => { setScreen(s); window.scrollTo(0, 0); };
+  const go = (s, extra, opts = {}) => {
+    if (extra) setUi((u) => ({ ...u, ...extra }));
+    if (opts.root) stack.current = [];
+    else if (!opts.replace && s !== screen) stack.current.push(screen);
+    if (!NATIVE && s !== screen) try { history.pushState({ s }, ''); } catch { /* ignore */ }
+    show(s);
+  };
+  const back = () => {
+    const prev = stack.current.pop();
+    if (prev) { show(prev); return true; }
+    if (screen !== homeScreen) { show(homeScreen); return true; }
+    return false; // already home: let Android close the app
+  };
+  const goHome = () => { stack.current = []; show(homeScreen); };
+  const backRef = useRef(back); backRef.current = back;
+  useEffect(() => {
+    if (NATIVE) {
+      const h = CapApp.addListener('backButton', () => { if (!backRef.current()) CapApp.exitApp(); });
+      return () => { h.then((x) => x.remove()); };
+    }
+    const onPop = () => backRef.current();
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   const T = THEMES[p.theme] || THEMES.volt;
   useEffect(() => {
@@ -34,7 +66,7 @@ export default function App() {
     '--dw': T.dw, '--upper': T.upper, '--h1': T.h1, '--r': T.r, '--rL': T.rL, '--pill': T.pill,
   };
 
-  const openReport = (r, from) => go('report', { report: r, reportFrom: from });
+  const openReport = (r, from, opts) => go('report', { report: r, reportFrom: from }, opts);
 
   const finishSet = async (repLog, secs, clipBlob, mode) => {
     const ex = items[ui.exIdx] || items[0];
@@ -43,7 +75,7 @@ export default function App() {
     if (clipBlob) { await putClip(id, clipBlob); hasClip = true; }
     const rec = { id, title: ex[0], date: todayLabel(), duration: fmtTime(secs), reps: repLog, source: mode === 'demo' ? 'demo' : 'live', hasClip, ts: Date.now() };
     if (repLog.length) set((s) => ({ recs: [rec, ...s.recs] }));
-    openReport(rec, 'live');
+    openReport(rec, 'live', { replace: true });
   };
 
   const tabs = pro ? [['clients', 'Clients'], ['recordings', 'Recordings'], ['me', 'Me']] : [['today', 'Today'], ['recordings', 'Recordings'], ['me', 'Me']];
@@ -53,31 +85,33 @@ export default function App() {
   const showTabs = ['today', 'report', 'recordings', 'clients', 'client', 'me'].includes(screen);
 
   let body;
-  if (screen === 'welcome') body = <Welcome p={p} set={set} onNext={() => (pro ? (set({ onboarded: true }), go('clients')) : go('goal'))} />;
+  if (screen === 'welcome') body = <Welcome p={p} set={set} onNext={() => (pro ? (set({ onboarded: true }), go('clients', null, { root: true })) : go('goal'))} />;
   else if (screen === 'goal') body = <Goal p={p} set={set} onNext={() => go('setup')} />;
-  else if (screen === 'setup') body = <Setup p={p} set={set} onBack={() => go('goal')} onNext={() => { set({ onboarded: true }); go('today'); }} />;
-  else if (screen === 'today') body = <Today p={p} items={items} recs={p.recs} onStart={(i) => go('live', { exIdx: i })} />;
-  else if (screen === 'live') body = <Live p={p} set={set} ex={items[ui.exIdx] || items[0]} onExit={() => go(pro ? 'clients' : 'today')} onFinish={finishSet} />;
+  else if (screen === 'setup') body = <Setup p={p} set={set} onNext={() => { set({ onboarded: true }); go('today', null, { root: true }); }} />;
+  else if (screen === 'today') body = <Today p={p} set={set} items={items} recs={p.recs} onStart={(i) => go('live', { exIdx: i })} onEditSetup={() => go('setup')} />;
+  else if (screen === 'live') body = <Live p={p} set={set} ex={items[ui.exIdx] || items[0]} onExit={back} onFinish={finishSet} />;
   else if (screen === 'report') {
-    const from = ui.reportFrom, cl = CLIENTS.find((c) => c.id === ui.clientId);
     body = <Report T={T} r={ui.report || SEED[0]} pro={pro} p={p} set={set}
-      backLabel={from === 'client' ? (cl?.name || 'Client').toUpperCase() : from === 'live' ? (pro ? 'CLIENTS' : 'TODAY') : 'RECORDINGS'}
-      onBack={() => go(from === 'client' ? 'client' : from === 'live' ? (pro ? 'clients' : 'today') : 'recordings')}
-      onDelete={(r) => { deleteClip(r.id); set((s) => ({ recs: s.recs.filter((x) => x.id !== r.id) })); go('recordings'); }} />;
+      onDelete={(r) => { deleteClip(r.id); set((s) => ({ recs: s.recs.filter((x) => x.id !== r.id) })); back(); }} />;
   }
   else if (screen === 'recordings') body = <Recordings T={T} recs={allRecs} onOpen={(r) => openReport(r, 'recordings')}
     onImported={(rec) => { set((s) => ({ recs: [rec, ...s.recs] })); openReport(rec, 'recordings'); }} />;
   else if (screen === 'clients') body = <Clients T={T} onOpen={(c) => go('client', { clientId: c.id })} />;
-  else if (screen === 'client') body = <Client T={T} c={CLIENTS.find((c) => c.id === ui.clientId) || CLIENTS[0]} onBack={() => go('clients')} onOpen={(r) => openReport(r, 'client')} />;
-  else if (screen === 'me') body = <Me p={p} set={set} onRedo={() => go('goal')} onReset={async () => { clearState(); await clearClips(); setP({ ...DEFAULTS }); go('welcome'); }} />;
+  else if (screen === 'client') body = <Client T={T} c={CLIENTS.find((c) => c.id === ui.clientId) || CLIENTS[0]} onOpen={(r) => openReport(r, 'client')} />;
+  else if (screen === 'me') body = <Me p={p} set={set} onRedo={() => go('goal')} onReset={async () => { clearState(); await clearClips(); setP({ ...DEFAULTS }); go('welcome', null, { root: true }); }} />;
 
   return (
     <div className={'app' + (screen === 'live' ? ' is-live' : '')} style={vars} data-theme={p.theme}>
-      <main className={screen === 'live' ? 'live-main' : 'main'}>{body}</main>
+      <main className={screen === 'live' ? 'live-main' : 'main'}>
+        {screen !== 'live' && screen !== 'welcome' && screen !== homeScreen && (
+          <TopBar onBack={back} onHome={screen === 'goal' && !p.onboarded ? null : goHome} homeLabel={!p.onboarded ? 'Start' : 'Home'} />
+        )}
+        {body}
+      </main>
       {showTabs && (
         <nav className="tabs">
           {tabs.map(([id, label]) => (
-            <button key={id} className={'tab' + (activeTab === id ? ' on' : '')} onClick={() => go(id)}>{label}</button>
+            <button key={id} className={'tab' + (activeTab === id ? ' on' : '')} onClick={() => go(id, null, { root: id === homeScreen ? true : false })}>{label}</button>
           ))}
         </nav>
       )}
@@ -86,6 +120,12 @@ export default function App() {
 }
 
 /* ------------------------------ small pieces ------------------------------ */
+const TopBar = ({ onBack, onHome, homeLabel }) => (
+  <div className="topbar">
+    <button className="nav-btn" onClick={onBack} aria-label="Back"><span className="nav-ico">‹</span>Back</button>
+    {onHome && <button className="nav-btn" onClick={onHome} aria-label={homeLabel}><span className="nav-ico home">⌂</span>{homeLabel}</button>}
+  </div>
+);
 const Pick = ({ on, label, sub, onClick }) => (
   <button className={'pick' + (on ? ' on' : '')} onClick={onClick}>
     <span className="pick-label">{label}</span>{sub && <span className="pick-sub">{sub}</span>}
@@ -145,10 +185,10 @@ function Goal({ p, set, onNext }) {
   );
 }
 
-function Setup({ p, set, onBack, onNext }) {
+function Setup({ p, set, onNext }) {
   return (
     <div className="screen">
-      <button className="eyebrow link" onClick={onBack}>← STEP 2 OF 2</button>
+      <Eyebrow>STEP 2 OF 2</Eyebrow>
       <h1 className="h1">Where do you train?</h1>
       <div className="grid2">
         <Pick on={p.place === 'home'} label="Home" sub="Bodyweight + kit" onClick={() => set({ place: 'home' })} />
@@ -171,18 +211,23 @@ function Setup({ p, set, onBack, onNext }) {
 }
 
 /* ---------------------------------- today --------------------------------- */
-function Today({ p, items, recs, onStart }) {
+function Today({ p, set, items, recs, onStart, onEditSetup }) {
   const now = new Date();
   const dateLbl = now.toLocaleDateString('en-NZ', { weekday: 'short' }).toUpperCase() + ' · ' + now.toLocaleDateString('en-NZ', { month: 'short', day: 'numeric' }).toUpperCase();
   const dow = (now.getDay() + 6) % 7; // Monday = 0
   const monday = new Date(now); monday.setHours(0, 0, 0, 0); monday.setDate(now.getDate() - dow);
   const doneDays = new Set(recs.filter((r) => r.ts && r.ts >= monday.getTime()).map((r) => (new Date(r.ts).getDay() + 6) % 7));
-  const goal = GOALS.find((g) => g.id === p.goal);
   return (
     <div className="screen">
       <Eyebrow>{dateLbl}</Eyebrow>
       <h1 className="title-xl sm">{PLANS[p.goal].title}</h1>
-      <span className="goal-chip">{goal.label} · {p.place === 'home' ? 'Home' : 'Gym'}</span>
+      <div className="switcher">
+        <div className="switch-head"><span className="h3 flat">Workout type</span><button className="text-btn" onClick={onEditSetup}>Equipment & level ›</button></div>
+        <div className="chip-scroll">
+          {GOALS.map((g) => <button key={g.id} className={'chip' + (p.goal === g.id ? ' on' : '')} onClick={() => set({ goal: g.id })}>{g.label}</button>)}
+        </div>
+        <Seg options={['Home', 'Gym']} value={p.place === 'home' ? 'Home' : 'Gym'} onChange={(v) => set({ place: v === 'Home' ? 'home' : 'gym' })} />
+      </div>
       <div className="week">
         {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((l, i) => (
           <div key={i} className={'day' + (i === dow ? ' today' : '')}>
@@ -302,7 +347,7 @@ function Live({ p, set, ex, onExit, onFinish }) {
 }
 
 /* --------------------------------- report --------------------------------- */
-function Report({ T, r, pro, p, set, backLabel, onBack, onDelete }) {
+function Report({ T, r, pro, p, set, onDelete }) {
   const b = useMemo(() => buildReport(r, T), [r, T]);
   const [clipUrl, setClipUrl] = useState(null);
   const [shared, setShared] = useState('');
@@ -329,7 +374,6 @@ function Report({ T, r, pro, p, set, backLabel, onBack, onDelete }) {
 
   return (
     <div className="screen">
-      <button className="eyebrow link" onClick={onBack}>← {backLabel}</button>
       <div className="report-head">
         <div><Eyebrow>{(r.date + ' · SET 1').toUpperCase()}</Eyebrow><h1 className="h1 tight">{r.title}</h1></div>
         {!empty && <div className="score" style={{ color: b.scoreColor }}><b>{b.score}</b><small>Form score</small></div>}
@@ -439,10 +483,9 @@ function Clients({ T, onOpen }) {
   );
 }
 
-function Client({ T, c, onBack, onOpen }) {
+function Client({ T, c, onOpen }) {
   return (
     <div className="screen">
-      <button className="eyebrow link" onClick={onBack}>← CLIENTS</button>
       <div className="client-head"><span className="avatar lg">{initials(c.name)}</span><div><h1 className="h1 tight">{c.name}</h1><div className="muted">{c.goal} · {c.place}</div></div></div>
       <div className="card"><Eyebrow>INJURY RECORD</Eyebrow><b>{c.injury}</b><p className="muted">{c.injuryNote}</p></div>
       <h3 className="h3">Compare recordings <span className="muted small">· {c.metric}</span></h3>
